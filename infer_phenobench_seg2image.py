@@ -1,6 +1,7 @@
 from share import *
 import config
 
+import os
 import cv2
 import einops
 import gradio as gr
@@ -23,16 +24,27 @@ model = model.cuda()
 ddim_sampler = DDIMSampler(model)
 
 
-def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resolution, detect_resolution, ddim_steps, guess_mode, strength, scale, seed, eta):
+def process(input_image, 
+            prompt, 
+            a_prompt="best quality, extremely detailed", 
+            n_prompt="longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality", 
+            num_samples=1, 
+            # image_resolution, 
+            # detect_resolution, 
+            ddim_steps=20, 
+            guess_mode=False, 
+            strength=2.0, 
+            scale=9.0, 
+            seed=10, 
+            # eta
+            ):
     with torch.no_grad():
-        input_image = HWC3(input_image)
-        detected_map = apply_uniformer(resize_image(input_image, detect_resolution))
-        img = resize_image(input_image, image_resolution)
-        H, W, C = img.shape
+        # H, W, C = img.shape
+        input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2RGB)
+        H, W, C = 1024, 1024, 3
+        resized_image = cv2.resize(input_image, (W, H), interpolation=cv2.INTER_NEAREST)
 
-        detected_map = cv2.resize(detected_map, (W, H), interpolation=cv2.INTER_NEAREST)
-
-        control = torch.from_numpy(detected_map.copy()).float().cuda() / 255.0
+        control = torch.from_numpy(resized_image.copy()).float().cuda() / 255.0
         control = torch.stack([control for _ in range(num_samples)], dim=0)
         control = einops.rearrange(control, 'b h w c -> b c h w').clone()
 
@@ -52,7 +64,8 @@ def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resoluti
 
         model.control_scales = [strength * (0.825 ** float(12 - i)) for i in range(13)] if guess_mode else ([strength] * 13)  # Magic number. IDK why. Perhaps because 0.825**12<0.01 but 0.826**12>0.01
         samples, intermediates = ddim_sampler.sample(ddim_steps, num_samples,
-                                                     shape, cond, verbose=False, eta=eta,
+                                                     shape, cond, verbose=False, 
+                                                    #  eta=eta,
                                                      unconditional_guidance_scale=scale,
                                                      unconditional_conditioning=un_cond)
 
@@ -63,35 +76,13 @@ def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resoluti
         x_samples = (einops.rearrange(x_samples, 'b c h w -> b h w c') * 127.5 + 127.5).cpu().numpy().clip(0, 255).astype(np.uint8)
 
         results = [x_samples[i] for i in range(num_samples)]
-    return [detected_map] + results
+    return [resized_image] + results
 
+input_mask = cv2.imread("/netscratch/naeem/phenobench/plants_panoptic_val/05-15_00180_P0030686_panoptic.png")
+prompt = "sugarbeet crops and weed plants of different species in early stages with sunny lighting conditions in the morning and dry darker brown soil background"
 
-block = gr.Blocks().queue()
-with block:
-    with gr.Row():
-        gr.Markdown("## Control Stable Diffusion with Segmentation Maps")
-    with gr.Row():
-        with gr.Column():
-            input_image = gr.Image(source='upload', type="numpy")
-            prompt = gr.Textbox(label="Prompt")
-            run_button = gr.Button(label="Run")
-            with gr.Accordion("Advanced options", open=False):
-                num_samples = gr.Slider(label="Images", minimum=1, maximum=12, value=1, step=1)
-                image_resolution = gr.Slider(label="Image Resolution", minimum=256, maximum=768, value=512, step=64)
-                strength = gr.Slider(label="Control Strength", minimum=0.0, maximum=2.0, value=1.0, step=0.01)
-                guess_mode = gr.Checkbox(label='Guess Mode', value=False)
-                detect_resolution = gr.Slider(label="Segmentation Resolution", minimum=128, maximum=1024, value=512, step=1)
-                ddim_steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=20, step=1)
-                scale = gr.Slider(label="Guidance Scale", minimum=0.1, maximum=30.0, value=9.0, step=0.1)
-                seed = gr.Slider(label="Seed", minimum=-1, maximum=2147483647, step=1, randomize=True)
-                eta = gr.Number(label="eta (DDIM)", value=0.0)
-                a_prompt = gr.Textbox(label="Added Prompt", value='best quality, extremely detailed')
-                n_prompt = gr.Textbox(label="Negative Prompt",
-                                      value='longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality')
-        with gr.Column():
-            result_gallery = gr.Gallery(label='Output', show_label=False, elem_id="gallery").style(grid=2, height='auto')
-    ips = [input_image, prompt, a_prompt, n_prompt, num_samples, image_resolution, detect_resolution, ddim_steps, guess_mode, strength, scale, seed, eta]
-    run_button.click(fn=process, inputs=ips, outputs=[result_gallery])
-
-
-block.launch(server_name='0.0.0.0')
+result = process(input_image=input_mask, prompt=prompt)
+target_dir = '/netscratch/naeem/controlnet/examples/exp1'
+os.makedirs(target_dir, exist_ok=True)
+for idx, image in enumerate(result):
+    cv2.imwrite(os.path.join(target_dir, 'image_{}.png'.format(idx)), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
