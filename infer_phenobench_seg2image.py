@@ -8,38 +8,42 @@ import gradio as gr
 import numpy as np
 import torch
 import random
+from tqdm import tqdm
+from glob import glob
+from random import choice
 
 from pytorch_lightning import seed_everything
 from annotator.util import resize_image, HWC3
-from annotator.uniformer import UniformerDetector
+# from annotator.uniformer import UniformerDetector
 from cldm.model import create_model, load_state_dict
 from cldm.ddim_hacked import DDIMSampler
 
 
-apply_uniformer = UniformerDetector()
+# apply_uniformer = UniformerDetector()
 
 model = create_model('./models/cldm_v15.yaml').cpu()
-model.load_state_dict(load_state_dict('/netscratch/naeem/controlnet/phenobench_train/lightning_logs/version_1243859/checkpoints/epoch=46-step=66128.ckpt', location='cuda'))
+model.load_state_dict(load_state_dict('/netscratch/naeem/controlnet/phenobench_train/lightning_logs/version_1252437/checkpoints/epoch42-step=60500_backup.ckpt', location='cuda'))
 model = model.cuda()
 ddim_sampler = DDIMSampler(model)
 
 
 def process(input_image, 
             prompt, 
-            a_prompt="best quality, extremely detailed", 
-            n_prompt="longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality", 
+            a_prompt="best quality, extremely detailed, realistic, agricultural", 
+            n_prompt="longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped, worst quality, cartoonish, low quality, deformed, ugly, blurry, low resolution, low quality", 
             num_samples=1, 
             # image_resolution, 
             # detect_resolution, 
             ddim_steps=20, 
             guess_mode=False, 
-            strength=2.0, 
-            scale=9.0, 
+            strength=0.6, 
+            scale=8, 
             seed=10, 
             # eta
             ):
     with torch.no_grad():
         # H, W, C = img.shape
+        input_image = cv2.imread(input_image)
         input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2RGB)
         H, W, C = 1024, 1024, 3
         resized_image = cv2.resize(input_image, (W, H), interpolation=cv2.INTER_NEAREST)
@@ -75,14 +79,21 @@ def process(input_image,
         x_samples = model.decode_first_stage(samples)
         x_samples = (einops.rearrange(x_samples, 'b c h w -> b h w c') * 127.5 + 127.5).cpu().numpy().clip(0, 255).astype(np.uint8)
 
-        results = [x_samples[i] for i in range(num_samples)]
-    return [resized_image] + results
+        # results = x_samples[0] for i in range(num_samples)
+    return x_samples[0]
 
-input_mask = cv2.imread("/netscratch/naeem/phenobench/plants_panoptic_val/05-15_00180_P0030686_panoptic.png")
-prompt = "sugarbeet crops and weed plants of different species in early stages with sunny lighting conditions in the morning and dry darker brown soil background"
-
-result = process(input_image=input_mask, prompt=prompt)
-target_dir = '/netscratch/naeem/controlnet/examples/exp1'
+# input_mask = cv2.imread("/netscratch/naeem/phenobench/plants_panoptic_val/05-15_00180_P0030686_panoptic.png")
+input_folder = '/netscratch/naeem/sugarbeet_syn_v6/plants_panoptic_train/'
+target_dir = '/netscratch/naeem/sugarbeet_syn_v6/controlnet_images/'
 os.makedirs(target_dir, exist_ok=True)
-for idx, image in enumerate(result):
-    cv2.imwrite(os.path.join(target_dir, 'image_{}.png'.format(idx)), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+images = sorted(glob(os.path.join(input_folder, '*.png')))
+prompts = [
+        "sugarbeet crops and weed plants of different species with dark green colored leaves from early growth stages with sunny lighting conditions in the morning and dry darker brown soil background",
+        "sugarbeet crops and weed plants of different species with dark green colored leaves from early stages with sunny lighting conditions in the afternoon and dry lighter brown soil background",
+        "sugarbeet crops and weed plants of different species with dark green colored leaves from later growth stages with overcast weather conditions without shadows and dark brown soil background with a bit of moisture"
+        ]
+
+for idx, input_mask in tqdm(enumerate(images)):
+    result = process(input_image=input_mask, prompt=choice(prompts))
+    base_name = os.path.basename(input_mask)
+    cv2.imwrite(os.path.join(target_dir, base_name[:4]+'.png'), cv2.cvtColor(result, cv2.COLOR_RGB2BGR))

@@ -19,7 +19,7 @@ import config
 apply_uniformer = UniformerDetector()
 
 model = create_model('./models/cldm_v15.yaml').cpu()
-model.load_state_dict(load_state_dict('/netscratch/naeem/controlnet/phenobench_train/lightning_logs/version_1243859/checkpoints/epoch=46-step=66128.ckpt', location='cuda'))
+model.load_state_dict(load_state_dict('/netscratch/naeem/controlnet/phenobench_train/lightning_logs/version_1252437/checkpoints/epoch42-step=60500_backup.ckpt', location='cuda'))
 model = model.cuda()
 ddim_sampler = DDIMSampler(model)
 
